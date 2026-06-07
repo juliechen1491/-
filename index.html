@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>小組成員分享平台</title>
+    <!-- 引入 Tailwind CSS 進行快速樣式設計 -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- 引入 PapaParse 用來解析 Google 試算表的 CSV 資料 -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+    <!-- 引入 Font Awesome 圖示 -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <style>
+        /* 確保從試算表來的換行符號能正常顯示 */
+        .content-text {
+            white-space: pre-line;
+        }
+        /* 隱藏捲軸但保留捲動功能 (美化) */
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #f1f1f1; 
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #cbd5e1; 
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #94a3b8; 
+        }
+    </style>
+</head>
+<body class="bg-slate-50 text-slate-800 font-sans min-h-screen flex flex-col">
+
+    <!-- 頂部導覽列與篩選器 -->
+    <header class="bg-white shadow-sm sticky top-0 z-10">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
+            <div class="flex flex-col sm:flex-row justify-between items-center gap-4">
+                <div class="flex items-center gap-3">
+                    <div class="bg-blue-600 text-white p-2 rounded-lg">
+                        <i class="fa-solid fa-users fa-lg"></i>
+                    </div>
+                    <h1 class="text-2xl font-bold text-slate-900">小組分享交流區</h1>
+                </div>
+                
+                <!-- 名字篩選器 -->
+                <div class="flex items-center gap-2 w-full sm:w-auto">
+                    <label for="nameFilter" class="text-sm font-medium text-slate-600 whitespace-nowrap">
+                        <i class="fa-solid fa-filter mr-1"></i> 篩選成員：
+                    </label>
+                    <select id="nameFilter" class="w-full sm:w-48 bg-slate-50 border border-slate-300 text-slate-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block p-2.5 outline-none transition-colors">
+                        <option value="all">顯示所有人</option>
+                        <!-- 這裡的選項會由 JavaScript 動態生成 -->
+                    </select>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <!-- 主要內容區 -->
+    <main class="flex-grow max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 w-full">
+        
+        <!-- 載入中狀態提示 -->
+        <div id="loading" class="flex flex-col items-center justify-center py-20">
+            <i class="fa-solid fa-circle-notch fa-spin text-4xl text-blue-500 mb-4"></i>
+            <p class="text-slate-500">正在從 Google 試算表載入資料...</p>
+        </div>
+
+        <!-- 錯誤提示訊息 -->
+        <div id="errorMessage" class="hidden bg-red-100 border-l-4 border-red-500 text-red-700 p-4 rounded-md mb-6" role="alert">
+            <p class="font-bold">載入失敗</p>
+            <p id="errorText">無法讀取試算表資料。請確認網址是否正確，且已設定為「發布到網路」。</p>
+            <p id="errorDetail" class="text-sm mt-2 text-red-600 font-mono bg-red-50 p-2 rounded hidden"></p>
+        </div>
+
+        <!-- 資料卡片網格 -->
+        <div id="cardsGrid" class="hidden grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            <!-- 卡片會由 JavaScript 動態插入這裡 -->
+        </div>
+
+        <!-- 無資料提示 -->
+        <div id="noDataMessage" class="hidden flex flex-col items-center justify-center py-20 text-slate-500">
+            <i class="fa-solid fa-folder-open text-5xl mb-4 text-slate-300"></i>
+            <p class="text-lg">目前沒有找到符合的分享內容</p>
+        </div>
+
+    </main>
+
+    <!-- 底部資訊 -->
+    <footer class="bg-white border-t border-slate-200 mt-auto">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 text-center text-sm text-slate-500">
+            <p>資料來源：Google 試算表 | 託管於 GitHub Pages</p>
+        </div>
+    </footer>
+
+    <script>
+        // =========================================================================
+        // 【重要設定】請在這裡貼上你的 Google 試算表 CSV 發布網址
+        // =========================================================================
+        const GOOGLE_SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQ0f1jqR_1Z4rFNqpZhNozm7E92KrJNRwYo_3KqvUb5eDe1RY8nI_w_C252WLreFSgLlrdqnPTbwwf_/pub?output=csv"; 
+        
+        // --- 以下為程式邏輯，無需修改 ---
+
+        let allShares = []; // 儲存所有資料
+        const nameFilterSelect = document.getElementById('nameFilter');
+        const cardsGrid = document.getElementById('cardsGrid');
+        const loadingDiv = document.getElementById('loading');
+        const errorMessageDiv = document.getElementById('errorMessage');
+        const noDataMessageDiv = document.getElementById('noDataMessage');
+
+        // 頁面載入後自動執行
+        document.addEventListener('DOMContentLoaded', initApp);
+
+        function initApp() {
+            // 如果還沒填寫網址，提供測試用假資料方便預覽
+            if (!GOOGLE_SHEET_CSV_URL || GOOGLE_SHEET_CSV_URL.trim() === "") {
+                loadMockData();
+                return;
+            }
+
+            // 使用 PapaParse 從網址讀取 CSV
+            Papa.parse(GOOGLE_SHEET_CSV_URL, {
+                download: true,
+                header: true, // 假設第一行是標題（名字、分享內容、分享類別、分享時間）
+                skipEmptyLines: true,
+                complete: function(results) {
+                    console.log("解析完成，讀取到的原始資料：", results);
+
+                    // 檢查是否讀取到 HTML (通常是因為權限不足被導向登入頁面)
+                    if (results.data.length > 0 && Object.keys(results.data[0]).some(key => key.includes('<!DOCTYPE html>') || key.includes('<html'))) {
+                        showError("權限錯誤：試算表被限制存取。", "請至「發布到網路」>「發布內容與設定」中，取消勾選「限制特定組織使用者存取」的選項。");
+                        return;
+                    }
+
+                    // 檢查標題列是否有我們需要的欄位
+                    if (results.data.length > 0) {
+                        const headers = Object.keys(results.data[0]);
+                        const expectedHeaders = ['名字', '分享內容', '分享類別', '分享時間'];
+                        const missingHeaders = expectedHeaders.filter(h => !headers.includes(h));
+                        
+                        if (missingHeaders.length > 0) {
+                            showError(
+                                `欄位名稱不符合！`, 
+                                `找不到以下欄位：${missingHeaders.join(', ')}。\n目前讀取到的欄位有：${headers.join(', ')}。\n請檢查試算表第一列是否有錯字或多餘的空白。`
+                            );
+                            return;
+                        }
+                    }
+
+                    // 過濾掉可能為空的列 (確保有名字欄位)
+                    allShares = results.data.filter(row => row['名字'] && row['名字'].trim() !== '');
+                    
+                    if (allShares.length === 0) {
+                        showError("試算表中沒有有效資料。", "請確認試算表中除了標題列之外，是否已經填寫了內容。");
+                        return;
+                    }
+                    
+                    setupFilters();
+                    renderCards('all');
+                },
+                error: function(error) {
+                    console.error("解析 CSV 發生錯誤:", error);
+                    showError("網路請求失敗，無法取得 CSV 檔案。", `錯誤詳情：${error.message}\n可能原因：網址錯誤、未發布到網路、或是遭到瀏覽器擴充功能阻擋。`);
+                }
+            });
+        }
+
+        // 設定篩選器選項
+        function setupFilters() {
+            // 提取所有不重複的名字
+            const uniqueNames = [...new Set(allShares.map(item => item['名字'].trim()))];
+            
+            // 將名字按筆畫或拼音排序
+            uniqueNames.sort();
+
+            // 動態加入 <option>
+            uniqueNames.forEach(name => {
+                const option = document.createElement('option');
+                option.value = name;
+                option.textContent = name;
+                nameFilterSelect.appendChild(option);
+            });
+
+            // 監聽篩選器變更事件
+            nameFilterSelect.addEventListener('change', (e) => {
+                renderCards(e.target.value);
+            });
+        }
+
+        // 渲染卡片
+        function renderCards(filterName) {
+            // 隱藏載入中提示
+            loadingDiv.classList.add('hidden');
+            errorMessageDiv.classList.add('hidden');
+            
+            // 清空目前的網格
+            cardsGrid.innerHTML = '';
+
+            // 根據名字過濾資料
+            const filteredData = filterName === 'all' 
+                ? allShares 
+                : allShares.filter(item => item['名字'].trim() === filterName);
+
+            // 判斷是否有資料
+            if (filteredData.length === 0) {
+                cardsGrid.classList.add('hidden');
+                noDataMessageDiv.classList.remove('hidden');
+                return;
+            }
+
+            cardsGrid.classList.remove('hidden');
+            noDataMessageDiv.classList.add('hidden');
+
+            // 將資料最新的排在前面 (假設試算表越下方越新，我們將陣列反轉)
+            // 如果你有特定的時間格式想用程式排序，可以在這裡處理
+            const displayData = [...filteredData].reverse();
+
+            // 產生 HTML
+            displayData.forEach(item => {
+                // 處理可能的欄位名稱變異 (容錯處理)
+                const name = item['名字'] || '未知';
+                const content = item['分享內容'] || '無內容';
+                const category = item['分享類別'] || '未分類';
+                const time = item['分享時間'] || '';
+
+                // 為不同類別產生不同的顏色標籤
+                const badgeColor = getCategoryColor(category);
+
+                const cardHTML = `
+                    <div class="bg-white rounded-xl shadow-sm hover:shadow-md transition-shadow duration-300 border border-slate-100 flex flex-col h-full overflow-hidden">
+                        <!-- 卡片頭部 -->
+                        <div class="p-5 border-b border-slate-50 flex justify-between items-start gap-2 bg-slate-50/50">
+                            <div class="flex items-center gap-2">
+                                <div class="w-10 h-10 rounded-full bg-gradient-to-br from-blue-100 to-blue-200 flex items-center justify-center text-blue-700 font-bold text-lg shrink-0">
+                                    ${name.charAt(0)}
+                                </div>
+                                <h3 class="font-bold text-lg text-slate-800">${name}</h3>
+                            </div>
+                            <span class="px-3 py-1 text-xs font-medium rounded-full whitespace-nowrap ${badgeColor}">
+                                ${category}
+                            </span>
+                        </div>
+                        
+                        <!-- 卡片內容 -->
+                        <div class="p-5 flex-grow">
+                            <p class="text-slate-700 content-text leading-relaxed">${escapeHTML(content)}</p>
+                        </div>
+                        
+                        <!-- 卡片底部 (時間) -->
+                        <div class="px-5 py-3 bg-slate-50 border-t border-slate-100 text-xs text-slate-500 flex items-center">
+                            <i class="fa-regular fa-clock mr-1.5"></i> ${time}
+                        </div>
+                    </div>
+                `;
+                cardsGrid.insertAdjacentHTML('beforeend', cardHTML);
+            });
+        }
+
+        // 簡單的類別顏色對應
+        function getCategoryColor(category) {
+            const cat = category.toLowerCase();
+            if (cat.includes('技術') || cat.includes('tech')) return 'bg-blue-100 text-blue-800';
+            if (cat.includes('生活') || cat.includes('life')) return 'bg-green-100 text-green-800';
+            if (cat.includes('閱讀') || cat.includes('book')) return 'bg-purple-100 text-purple-800';
+            if (cat.includes('好康') || cat.includes('分享')) return 'bg-amber-100 text-amber-800';
+            if (cat.includes('問題') || cat.includes('求救')) return 'bg-red-100 text-red-800';
+            return 'bg-slate-100 text-slate-800'; // 預設顏色
+        }
+
+        // 防止 XSS 攻擊的簡單處理
+        function escapeHTML(str) {
+            return str.replace(/[&<>'"]/g, 
+                tag => ({
+                    '&': '&amp;',
+                    '<': '&lt;',
+                    '>': '&gt;',
+                    "'": '&#39;',
+                    '"': '&quot;'
+                }[tag] || tag)
+            );
+        }
+
+        // 顯示錯誤訊息
+        function showError(customMsg, detailMsg = null) {
+            loadingDiv.classList.add('hidden');
+            errorMessageDiv.classList.remove('hidden');
+            
+            if(customMsg) {
+                document.getElementById('errorText').textContent = customMsg;
+            }
+            
+            const detailElement = document.getElementById('errorDetail');
+            if(detailMsg) {
+                detailElement.textContent = detailMsg;
+                detailElement.classList.remove('hidden');
+            } else {
+                detailElement.classList.add('hidden');
+            }
+        }
+
+        // 載入預設假資料 (當未提供 Google Sheet 網址時)
+        function loadMockData() {
+            console.log("未提供 CSV 網址，載入示範資料...");
+            allShares = [
+                { "名字": "小明", "分享內容": "今天研究了 GitHub Pages 的部署，其實只要把 index.html 推上去就可以了，非常方便！\n\n推薦大家試試看。", "分享類別": "技術", "分享時間": "2023-10-25 10:30" },
+                { "名字": "愛麗絲", "分享內容": "中山站附近新開了一家咖啡廳，氣氛很好，下次小組開會可以約那邊☕️", "分享類別": "生活", "分享時間": "2023-10-26 14:15" },
+                { "名字": "志明", "分享內容": "推薦《原子習慣》這本書，裡面提到的「兩分鐘法則」對於克服拖延症很有幫助。", "分享類別": "閱讀推薦", "分享時間": "2023-10-27 09:00" },
+                { "名字": "小明", "分享內容": "發現一個好用的免費圖庫網站 Unsplash，做簡報時找圖很方便。", "分享類別": "好康分享", "分享時間": "2023-10-28 16:45" },
+                { "名字": "愛麗絲", "分享內容": "有人知道怎麼解決 npm 安裝時出現的 ERESOLVE 錯誤嗎？卡了一整個下午 😭", "分享類別": "問題求救", "分享時間": "2023-10-29 20:10" }
+            ];
+            setTimeout(() => {
+                setupFilters();
+                renderCards('all');
+            }, 800); // 模擬網路延遲
+        }
+    </script>
+</body>
+</html>
